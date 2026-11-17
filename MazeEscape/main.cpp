@@ -12,6 +12,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#define STB_IMAGE_IMPLEMENTATION
+#include "include/stb/stb_image.h"
 
 // Window
 int windowWidth = 1280;
@@ -21,6 +23,8 @@ int windowHeight = 720;
 GLuint shaderProgram = 0;
 GLuint cubeVAO = 0;
 GLuint cubeVBO = 0;
+GLuint wallTexture = 0;
+GLuint floorTexture = 0;
 
 // Camera
 glm::vec3 cameraPos(1.5f, 0.5f, 1.5f);
@@ -57,10 +61,18 @@ const std::vector<std::string> maze = {
 };
 
 // Shaders
+
+
 const char* vertexShaderSource = R"(
 #version 330 core
 
 layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 2) in vec3 aNormal;
+
+out vec2 TexCoord;
+out vec3 FragPos;
+out vec3 Normal;
 
 uniform mat4 model;
 uniform mat4 view;
@@ -68,22 +80,81 @@ uniform mat4 projection;
 
 void main()
 {
-    gl_Position = projection * view * model *
-                  vec4(aPos, 1.0);
+    vec4 worldPos = model * vec4(aPos, 1.0);
+
+    FragPos = worldPos.xyz;
+
+    Normal = mat3(transpose(inverse(model))) * aNormal;
+
+    TexCoord = aTexCoord;
+
+    gl_Position = projection * view * worldPos;
 }
 )";
+
+
+
 
 const char* fragmentShaderSource = R"(
 #version 330 core
 
-uniform vec3 objectColor;
+in vec2 TexCoord;
+in vec3 FragPos;
+in vec3 Normal;
+
 out vec4 FragColor;
+
+uniform sampler2D ourTexture;
+uniform vec3 objectColor;
+
+uniform vec3 lightPos;
+uniform vec3 lightColor;
+uniform vec3 viewPos;
 
 void main()
 {
-    FragColor = vec4(objectColor, 1.0);
+    // Get texture color
+    vec3 texColor = texture(ourTexture, TexCoord).rgb;
+    vec3 baseColor = texColor * objectColor;
+
+    // Ambient lighting
+    float ambientStrength = 0.18;
+    vec3 ambient = ambientStrength * lightColor;
+
+    // Diffuse lighting
+    vec3 norm = normalize(Normal);
+    vec3 lightDir = normalize(lightPos - FragPos);
+
+    float diff = max(dot(norm, lightDir), 0.0);
+    vec3 diffuse = diff * lightColor;
+
+    // Blinn-Phong specular lighting
+    vec3 viewDir = normalize(viewPos - FragPos);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+
+    float spec = pow(
+        max(dot(norm, halfwayDir), 0.0),
+        32.0
+    );
+
+    float specularStrength = 0.15;
+    vec3 specular = specularStrength * spec * lightColor;
+
+    // Distance attenuation
+    float distance = length(lightPos - FragPos);
+    float attenuation = 1.0 /
+        (1.0 + 0.09 * distance + 0.032 * distance * distance);
+
+    vec3 lighting = ambient +
+                    (diffuse + specular) * attenuation;
+
+    vec3 result = lighting * baseColor;
+
+    FragColor = vec4(result, 1.0);
 }
 )";
+
+
 
 GLuint compileShader(GLenum type, const char* source)
 {
@@ -137,6 +208,87 @@ void createShaders()
     glDeleteShader(fragment);
 }
 
+GLuint loadTexture(const char* path)
+{
+    int width, height, channels;
+
+    stbi_set_flip_vertically_on_load(true);
+
+    unsigned char* data = stbi_load(
+        path, &width, &height, &channels, 0
+    );
+
+    if (!data) {
+        std::cerr << "Failed to load texture: "
+            << path << std::endl;
+        return 0;
+    }
+
+    GLenum format;
+
+    if (channels == 4)
+        format = GL_RGBA;
+    else if (channels == 3)
+        format = GL_RGB;
+    else if (channels == 1)
+        format = GL_RED;
+    else {
+        std::cerr << "Unsupported texture format: "
+            << path << std::endl;
+        stbi_image_free(data);
+        return 0;
+    }
+
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        format,
+        width,
+        height,
+        0,
+        format,
+        GL_UNSIGNED_BYTE,
+        data
+    );
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_WRAP_S,
+        GL_REPEAT
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_WRAP_T,
+        GL_REPEAT
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_MIN_FILTER,
+        GL_LINEAR_MIPMAP_LINEAR
+    );
+
+    glTexParameteri(
+        GL_TEXTURE_2D,
+        GL_TEXTURE_MAG_FILTER,
+        GL_LINEAR
+    );
+
+    stbi_image_free(data);
+
+    std::cout << "Loaded texture: "
+        << path << std::endl;
+
+    return texture;
+}
+
 void createCube()
 {
     float vertices[] = {
@@ -165,6 +317,58 @@ void createCube()
           -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f
     };
 
+
+
+    std::vector<float> texturedVertices;
+
+    const float uv[6][2] = {
+        {0.0f, 0.0f},
+        {1.0f, 0.0f},
+        {1.0f, 1.0f},
+        {0.0f, 0.0f},
+        {1.0f, 1.0f},
+        {0.0f, 1.0f}
+    };
+
+    // Each cube face has 6 vertices.
+    for (int i = 0; i < 36; i++)
+    {
+        int face = i / 6;
+
+        glm::vec3 p0(
+            vertices[face * 18],
+            vertices[face * 18 + 1],
+            vertices[face * 18 + 2]
+        );
+
+        glm::vec3 p1(
+            vertices[face * 18 + 3],
+            vertices[face * 18 + 4],
+            vertices[face * 18 + 5]
+        );
+
+        glm::vec3 p2(
+            vertices[face * 18 + 6],
+            vertices[face * 18 + 7],
+            vertices[face * 18 + 8]
+        );
+
+        glm::vec3 normal = glm::normalize(
+            glm::cross(p1 - p0, p2 - p0)
+        );
+
+        texturedVertices.push_back(vertices[i * 3]);
+        texturedVertices.push_back(vertices[i * 3 + 1]);
+        texturedVertices.push_back(vertices[i * 3 + 2]);
+
+        texturedVertices.push_back(uv[i % 6][0]);
+        texturedVertices.push_back(uv[i % 6][1]);
+
+        texturedVertices.push_back(normal.x);
+        texturedVertices.push_back(normal.y);
+        texturedVertices.push_back(normal.z);
+    }
+
     glGenVertexArrays(1, &cubeVAO);
     glGenBuffers(1, &cubeVBO);
 
@@ -173,19 +377,60 @@ void createCube()
 
     glBufferData(
         GL_ARRAY_BUFFER,
-        sizeof(vertices),
-        vertices,
+        texturedVertices.size() * sizeof(float),
+        texturedVertices.data(),
+        GL_STATIC_DRAW
+    );
+
+    // Position: XYZ
+    glVertexAttribPointer(
+        0, 3, GL_FLOAT, GL_FALSE,
+        8 * sizeof(float), (void*)0
+    );
+    glEnableVertexAttribArray(0);
+
+    // Texture coordinates: UV
+    glVertexAttribPointer(
+        1, 2, GL_FLOAT, GL_FALSE,
+        8 * sizeof(float),
+        (void*)(3 * sizeof(float))
+    );
+    glEnableVertexAttribArray(1);
+
+    // Normal: NX, NY, NZ
+    glVertexAttribPointer(
+        2, 3, GL_FLOAT, GL_FALSE,
+        8 * sizeof(float),
+        (void*)(5 * sizeof(float))
+    );
+    glEnableVertexAttribArray(2);
+
+    glBindVertexArray(0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
+
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        texturedVertices.size() * sizeof(float),
+        texturedVertices.data(),
         GL_STATIC_DRAW
     );
 
     glVertexAttribPointer(
         0, 3, GL_FLOAT, GL_FALSE,
-        3 * sizeof(float), (void*)0
+        5 * sizeof(float), (void*)0
     );
-
     glEnableVertexAttribArray(0);
 
+    glVertexAttribPointer(
+        1, 2, GL_FLOAT, GL_FALSE,
+        5 * sizeof(float),
+        (void*)(3 * sizeof(float))
+    );
+    glEnableVertexAttribArray(1);
+
     glBindVertexArray(0);
+
 }
 
 void drawCube(glm::vec3 position,
@@ -288,6 +533,30 @@ void display()
 
     glUseProgram(shaderProgram);
 
+    // Point light position
+    glm::vec3 lightPos = cameraPos + glm::vec3(0.0f, 0.5f, 0.0f);
+
+    // Warm torch-like light
+    glm::vec3 lightColor(1.0f, 0.75f, 0.45f);
+
+    glUniform3fv(
+        glGetUniformLocation(shaderProgram, "lightPos"),
+        1,
+        glm::value_ptr(lightPos)
+    );
+
+    glUniform3fv(
+        glGetUniformLocation(shaderProgram, "lightColor"),
+        1,
+        glm::value_ptr(lightColor)
+    );
+
+    glUniform3fv(
+        glGetUniformLocation(shaderProgram, "viewPos"),
+        1,
+        glm::value_ptr(cameraPos)
+    );
+
     glm::mat4 view = glm::lookAt(
         cameraPos,
         cameraPos + cameraFront,
@@ -312,28 +581,53 @@ void display()
     );
 
     // Floor and walls
+
+    // Activate texture unit 0
+    glActiveTexture(GL_TEXTURE0);
+
+    // Tell the shader to use texture unit 0
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "ourTexture"),
+        0
+    );
+
+    // Draw maze
     for (int row = 0; row < static_cast<int>(maze.size()); row++)
     {
         for (int col = 0; col < static_cast<int>(maze[row].size()); col++)
         {
-            // Floor
+            // 1. Bind floor texture
+            glBindTexture(GL_TEXTURE_2D, floorTexture);
+
+            // Draw floor
             drawCube(
                 glm::vec3(col + 0.5f, -0.08f, row + 0.5f),
                 glm::vec3(1.0f, 0.16f, 1.0f),
-                glm::vec3(0.25f, 0.24f, 0.23f)
+                glm::vec3(1.0f, 1.0f, 1.0f)
             );
+            // Ceiling
+            glBindTexture(GL_TEXTURE_2D, wallTexture);
 
-            // Wall
+            drawCube(
+                glm::vec3(col + 0.5f, 2.08f, row + 0.5f),
+                glm::vec3(1.0f, 0.16f, 1.0f),
+                glm::vec3(1.0f)
+            );
+            // 2. Bind wall texture
             if (maze[row][col] == '#')
             {
+                glBindTexture(GL_TEXTURE_2D, wallTexture);
+
+                // Draw wall
                 drawCube(
                     glm::vec3(col + 0.5f, 1.0f, row + 0.5f),
                     glm::vec3(1.0f, 2.0f, 1.0f),
-                    glm::vec3(0.48f, 0.47f, 0.45f)
+                    glm::vec3(1.0f, 1.0f, 1.0f)
                 );
             }
         }
     }
+
 
     glutSwapBuffers();
 }
@@ -357,6 +651,7 @@ void keyboardDown(unsigned char key, int x, int y)
         key = key - 'A' + 'a';
 
     keys[key] = true;
+    
 }
 
 void keyboardUp(unsigned char key, int x, int y)
@@ -440,7 +735,8 @@ int main(int argc, char** argv)
 
     createShaders();
     createCube();
-
+    wallTexture = loadTexture("assets/textures/wall.jpg");
+    floorTexture = loadTexture("assets/textures/floor.jpg");
     lastTime = glutGet(GLUT_ELAPSED_TIME);
 
     glutDisplayFunc(display);

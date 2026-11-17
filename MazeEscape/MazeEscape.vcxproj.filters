@@ -13,6 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Исходные файлы\assets">
+      <UniqueIdentifier>{2e3a10b4-a482-4961-9aec-8415c3ae2f24}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Исходные файлы\assets\textures">
+      <UniqueIdentifier>{c7c43564-fd29-47f2-8cb8-e6d924b9983d}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -24,5 +30,13 @@
     <ClCompile Include="main.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets\textures\floor.jpg">
+      <Filter>Исходные файлы\assets\textures</Filter>
+    </Image>
+    <Image Include="assets\textures\wall.jpg">
+      <Filter>Исходные файлы\assets\textures</Filter>
+    </Image>
   </ItemGroup>
 </Project>
