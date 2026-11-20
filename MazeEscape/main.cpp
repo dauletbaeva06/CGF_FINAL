@@ -4,9 +4,11 @@
 #include <cmath>
 #include <random>
 #include <algorithm>
-
+#include <queue>
 #include <cstdlib>
-
+#include <map>
+#include <array>
+#include <cctype>
 #include <GL/glew.h>
 #include <GL/freeglut.h>
 
@@ -16,11 +18,11 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "include/stb/stb_image.h"
 
-// Window
+
 int windowWidth = 1280;
 int windowHeight = 720;
 
-// OpenGL
+
 GLuint shaderProgram = 0;
 GLuint cubeVAO = 0;
 GLuint cubeVBO = 0;
@@ -28,26 +30,34 @@ GLuint wallTexture = 0;
 GLuint floorTexture = 0;
 GLuint keyTexture = 0;
 
-// Camera
 const glm::vec3 startPos(1.5f, 0.5f, 1.5f);
 glm::vec3 cameraPos = startPos;
 glm::vec3 cameraFront(0.0f, 0.0f, -1.0f);
 glm::vec3 cameraUp(0.0f, 1.0f, 0.0f);
-
+glm::vec3 movableLightPos(3.5f, 2.0f, 3.5f);
+float lightMoveSpeed = 3.0f;
 float yaw = -90.0f;
 float pitch = 0.0f;
 float cameraSpeed = 2.5f;
+bool freeCamera = false;
+bool manualLightMode = false;
+glm::vec3 savedCameraPos;
+float savedYaw = -90.0f;
+float savedPitch = 0.0f;
 float mouseSensitivity = 0.12f;
 
-// Input
 bool keys[256] = {};
 bool firstMouse = true;
 bool mouseCaptured = true;
 bool lightEnabled = true;
-
+bool showHelp = false;
 bool hasKey = false;
-bool gameWon = false;
-
+bool gameWon = false; 
+bool wasInFrontOfDoor = false;
+bool gamePaused = false;
+float animationTime = 0.0f;
+bool gameLost = false;
+const float GAME_TIME_LIMIT =90.0f;
 enum GameStatus {
     STATUS_FIND_KEY,
     STATUS_KEY_COLLECTED,
@@ -56,7 +66,6 @@ enum GameStatus {
 GameStatus lastPrintedStatus = STATUS_FIND_KEY;
 bool statusInitialized = false;
 
-// Key & Exit positions (in world coordinates)
 glm::vec3 keyPos(9.5f, 0.45f, 1.5f);
 glm::vec3 exitPos(9.5f, 0.5f, 9.5f);
 glm::vec3 exitTriggerPos(9.5f, 0.0f, 8.5f);
@@ -68,8 +77,11 @@ const float exitTriggerRadius = 0.75f;
 int lastMouseX = 640;
 int lastMouseY = 360;
 int lastTime = 0;
+float gameTime = 0.0f;
 
-// Maze
+int fpsFrames = 0;
+int fpsLastTime = 0;
+float currentFPS = 0.0f;
 const std::vector<std::string> maze = {
     "###########",
     "#S........#",
@@ -115,13 +127,37 @@ void updateCameraDirection()
 
 void resetGame()
 {
+    movableLightPos = glm::vec3(3.5f, 2.0f, 3.5f);
+ 
     cameraPos = startPos;
     yaw = -90.0f;
     pitch = 0.0f;
     updateCameraDirection();
+    manualLightMode = false;
+    movableLightPos = glm::vec3(3.5f, 2.0f, 3.5f);
 
     hasKey = false;
     gameWon = false;
+    wasInFrontOfDoor = false;
+    gamePaused = false;
+    animationTime = 0.0f;
+    freeCamera = false;
+    savedCameraPos = startPos;
+    savedYaw = -90.0f;
+    savedPitch = 0.0f;
+
+    gameTime = 0.0f;
+    lastTime = glutGet(GLUT_ELAPSED_TIME);
+
+    fpsFrames = 0;
+    fpsLastTime = lastTime;
+    currentFPS = 0.0f;
+
+    std::fill(std::begin(keys), std::end(keys), false);
+
+    lightEnabled = true;
+
+    /
     firstMouse = true;
     mouseCaptured = true;
 
@@ -129,12 +165,14 @@ void resetGame()
     glutWarpPointer(windowWidth / 2, windowHeight / 2);
 
     randomizeKeyAndExit();
-    glutMouseFunc(mouseClick);
 
+    statusInitialized = false;
     printStatus(STATUS_FIND_KEY, true);
+
+    std::cout << "Game restarted!" << std::endl;
 }
 
-// Button structure for "Play Again" button
+
 struct ButtonRect {
     float x;
     float y;
@@ -154,7 +192,60 @@ ButtonRect getPlayAgainButton()
 bool isPointInButton(int mx, int my, const ButtonRect& btn)
 {
     return mx >= btn.x && mx <= (btn.x + btn.w) &&
-           my >= btn.y && my <= (btn.y + btn.h);
+        my >= btn.y && my <= (btn.y + btn.h);
+}
+
+std::vector<glm::ivec2> getReachableCells()
+{
+    std::vector<glm::ivec2> result;
+
+    const int rows = static_cast<int>(maze.size());
+    const int startRow = static_cast<int>(startPos.z);
+    const int startCol = static_cast<int>(startPos.x);
+
+    std::vector<std::vector<bool>> visited(rows);
+
+    for (int r = 0; r < rows; ++r)
+        visited[r].resize(maze[r].size(), false);
+
+    std::queue<glm::ivec2> q;
+
+    q.push(glm::ivec2(startRow, startCol));
+    visited[startRow][startCol] = true;
+
+    const int dr[4] = { -1, 1, 0, 0 };
+    const int dc[4] = { 0, 0, -1, 1 };
+
+    while (!q.empty())
+    {
+        glm::ivec2 current = q.front();
+        q.pop();
+
+        int row = current.x;
+        int col = current.y;
+
+        result.push_back(current);
+
+        for (int d = 0; d < 4; ++d)
+        {
+            int nr = row + dr[d];
+            int nc = col + dc[d];
+
+            if (nr < 0 || nr >= rows)
+                continue;
+
+            if (nc < 0 || nc >= static_cast<int>(maze[nr].size()))
+                continue;
+
+            if (visited[nr][nc] || maze[nr][nc] == '#')
+                continue;
+
+            visited[nr][nc] = true;
+            q.push(glm::ivec2(nr, nc));
+        }
+    }
+
+    return result;
 }
 
 void randomizeKeyAndExit()
@@ -175,9 +266,23 @@ void randomizeKeyAndExit()
         for (int col = 0; col < cols; ++col) {
             char cell = maze[row][col];
             glm::vec2 center(col + 0.5f, row + 0.5f);
+            std::vector<glm::ivec2> reachable = getReachableCells();
+            if (cell == '.' &&
+                glm::length(center - glm::vec2(startPos.x, startPos.z)) > 2.0f)
+            {
+                bool canReach = false;
 
-            if (cell == '.' && glm::length(center - glm::vec2(startPos.x, startPos.z)) > 2.0f) {
-                freeCells.push_back(center);
+                for (const auto& pos : reachable)
+                {
+                    if (pos.x == row && pos.y == col)
+                    {
+                        canReach = true;
+                        break;
+                    }
+                }
+
+                if (canReach)
+                    freeCells.push_back(center);
             }
 
             if (cell == '#' && row > 0 && row < rows - 1 && col > 0 && col < cols - 1) {
@@ -186,7 +291,11 @@ void randomizeKeyAndExit()
                 for (int d = 0; d < 4; ++d) {
                     int nr = row + dr[d];
                     int nc = col + dc[d];
-                    if (maze[nr][nc] == '.') {
+                    int oppositeRow = row - dr[d];
+                    int oppositeCol = col - dc[d];
+
+                    if (maze[nr][nc] == '.' &&
+                        maze[oppositeRow][oppositeCol] == '.') {
                         glm::vec2 walkPos(nc + 0.5f, nr + 0.5f);
                         if (glm::length(walkPos - glm::vec2(startPos.x, startPos.z)) > 2.5f) {
                             glm::vec2 dir(static_cast<float>(dc[d]), static_cast<float>(dr[d]));
@@ -196,7 +305,7 @@ void randomizeKeyAndExit()
                                 glm::vec3(col + 0.5f, 0.0f, row + 0.5f),
                                 glm::vec3(walkPos.x, 0.0f, walkPos.y),
                                 dir
-                            });
+                                });
                             break;
                         }
                     }
@@ -229,104 +338,119 @@ void draw2DRect(float centerX, float centerY, float w, float h, const glm::vec3&
     drawCube(glm::vec3(centerX, centerY, z), glm::vec3(w, h, 1.0f), color, 0.0f);
 }
 
-void drawBlockLabel(float centerX, float centerY, float height, const std::string& text, const glm::vec3& color, float z = -0.5f)
+
+void drawBlockLabel(
+    float centerX,
+    float centerY,
+    float height,
+    const std::string& text,
+    const glm::vec3& color,
+    float z = -0.5f)
 {
-    float glyphW = height * 0.62f;
-    float gap = height * 0.24f;
-    float thick = std::max(2.5f, height * 0.16f);
-    float totalW = text.size() * glyphW + (!text.empty() ? (text.size() - 1) * gap : 0.0f);
-    float startX = centerX - totalW * 0.5f + glyphW * 0.5f;
+    static const std::map<char, std::array<unsigned char, 7>> font = {
+        {'A', {14,17,17,31,17,17,17}},
+        {'B', {30,17,17,30,17,17,30}},
+        {'C', {14,17,16,16,16,17,14}},
+        {'D', {30,17,17,17,17,17,30}},
+        {'E', {31,16,16,30,16,16,31}},
+        {'F', {31,16,16,30,16,16,16}},
+        {'G', {14,17,16,23,17,17,14}},
+        {'H', {17,17,17,31,17,17,17}},
+        {'I', {31,4,4,4,4,4,31}},
+        {'J', {7,2,2,2,18,18,12}},
+        {'K', {17,18,20,24,20,18,17}},
+        {'L', {16,16,16,16,16,16,31}},
+        {'M', {17,27,21,21,17,17,17}},
+        {'N', {17,25,21,19,17,17,17}},
+        {'O', {14,17,17,17,17,17,14}},
+        {'P', {30,17,17,30,16,16,16}},
+        {'Q', {14,17,17,17,21,18,13}},
+        {'R', {30,17,17,30,20,18,17}},
+        {'S', {15,16,16,14,1,1,30}},
+        {'T', {31,4,4,4,4,4,4}},
+        {'U', {17,17,17,17,17,17,14}},
+        {'V', {17,17,17,17,17,10,4}},
+        {'W', {17,17,17,21,21,21,10}},
+        {'X', {17,17,10,4,10,17,17}},
+        {'Y', {17,17,10,4,4,4,4}},
+        {'Z', {31,1,2,4,8,16,31}},
 
-    float halfW = glyphW * 0.5f - thick * 0.5f;
-    float halfH = height * 0.5f - thick * 0.5f;
+        {'0', {14,17,19,21,25,17,14}},
+        {'1', {4,12,4,4,4,4,14}},
+        {'2', {14,17,1,2,4,8,31}},
+        {'3', {30,1,1,14,1,1,30}},
+        {'4', {2,6,10,18,31,2,2}},
+        {'5', {31,16,16,30,1,1,30}},
+        {'6', {14,16,16,30,17,17,14}},
+        {'7', {31,1,2,4,8,8,8}},
+        {'8', {14,17,17,14,17,17,14}},
+        {'9', {14,17,17,15,1,1,14}},
 
-    for (size_t i = 0; i < text.size(); ++i) {
-        char ch = static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
-        float x = startX + i * (glyphW + gap);
-        float y = centerY;
+        {':', {0,4,4,0,4,4,0}},
+        {'-', {0,0,0,31,0,0,0}},
+        {'.', {0,0,0,0,0,12,12}},
+        {'/', {1,1,2,4,8,16,16}},
+        {'!', {4,4,4,4,4,0,4}},
+        {'?', {14,17,1,2,4,0,4}}
+    };
 
-        if (ch == ' ' || ch == '\0') continue;
+    const float pixel = height / 7.0f;
+    const float glyphWidth = pixel * 5.0f;
+    const float gap = pixel * 2.0f;
+    const float advance = glyphWidth + gap;
 
-        auto vBar = [&](float vx, float vy, float vh) {
-            draw2DRect(vx, vy, thick, vh, color, z);
-        };
-        auto hBar = [&](float hx, float hy, float hw) {
-            draw2DRect(hx, hy, hw, thick, color, z);
-        };
+    if (text.empty())
+        return;
 
-        switch (ch) {
-        case 'A':
-            hBar(x, y - halfH, glyphW);
-            hBar(x, y, glyphW);
-            vBar(x - halfW, y, height);
-            vBar(x + halfW, y, height);
-            break;
-        case 'G':
-            hBar(x, y - halfH, glyphW);
-            hBar(x, y + halfH, glyphW);
-            vBar(x - halfW, y, height);
-            vBar(x + halfW, y + height * 0.22f, height * 0.55f);
-            hBar(x + glyphW * 0.18f, y + height * 0.05f, glyphW * 0.55f);
-            break;
-        case 'I':
-            hBar(x, y - halfH, glyphW * 0.8f);
-            hBar(x, y + halfH, glyphW * 0.8f);
-            vBar(x, y, height);
-            break;
-        case 'N':
-            vBar(x - halfW, y, height);
-            vBar(x + halfW, y, height);
-            vBar(x - halfW * 0.35f, y - halfH * 0.35f, height * 0.45f);
-            hBar(x, y, glyphW * 0.65f);
-            vBar(x + halfW * 0.35f, y + halfH * 0.35f, height * 0.45f);
-            break;
-        case 'O':
-            hBar(x, y - halfH, glyphW);
-            hBar(x, y + halfH, glyphW);
-            vBar(x - halfW, y, height);
-            vBar(x + halfW, y, height);
-            break;
-        case 'R':
-            hBar(x, y - halfH, glyphW);
-            hBar(x, y - height * 0.08f, glyphW);
-            vBar(x - halfW, y, height);
-            vBar(x + halfW, y - halfH * 0.5f, height * 0.5f);
-            vBar(x + halfW * 0.65f, y + halfH * 0.55f, height * 0.52f);
-            break;
-        case 'S':
-            hBar(x, y - halfH, glyphW);
-            hBar(x, y, glyphW);
-            hBar(x, y + halfH, glyphW);
-            vBar(x - halfW, y - halfH * 0.5f, height * 0.5f);
-            vBar(x + halfW, y + halfH * 0.5f, height * 0.5f);
-            break;
-        case 'T':
-            hBar(x, y - halfH, glyphW);
-            vBar(x, y, height);
-            break;
-        case 'U':
-            hBar(x, y + halfH, glyphW);
-            vBar(x - halfW, y, height);
-            vBar(x + halfW, y, height);
-            break;
-        case 'W':
-            vBar(x - halfW, y, height);
-            vBar(x + halfW, y, height);
-            vBar(x, y + halfH * 0.25f, height * 0.65f);
-            hBar(x, y + halfH, glyphW);
-            break;
-        case 'Y':
-            vBar(x - halfW, y - halfH * 0.5f, height * 0.5f);
-            vBar(x + halfW, y - halfH * 0.5f, height * 0.5f);
-            hBar(x, y, glyphW);
-            vBar(x, y + halfH * 0.5f, height * 0.55f);
-            break;
-        default:
-            hBar(x, y, glyphW * 0.7f);
-            break;
+    const float totalWidth =
+        text.size() * glyphWidth +
+        (text.size() - 1) * gap;
+
+    const float startX = centerX - totalWidth / 2.0f;
+    const float startY = centerY - height / 2.0f;
+
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        unsigned char ch = static_cast<unsigned char>(text[i]);
+        ch = static_cast<unsigned char>(std::toupper(ch));
+
+        if (ch == ' ')
+            continue;
+
+        auto it = font.find(static_cast<char>(ch));
+
+        if (it == font.end())
+            it = font.find('?');
+
+        const auto& rows = it->second;
+
+        for (int row = 0; row < 7; ++row)
+        {
+            for (int col = 0; col < 5; ++col)
+            {
+                bool filled = (rows[row] & (1 << (4 - col))) != 0;
+
+                if (!filled)
+                    continue;
+
+                float px = startX + i * advance +
+                    col * pixel + pixel * 0.5f;
+
+                float py = startY +
+                    row * pixel + pixel * 0.5f;
+
+                draw2DRect(
+                    px, py,
+                    pixel * 0.92f,
+                    pixel * 0.92f,
+                    color,
+                    z
+                );
+            }
         }
     }
 }
+
 
 void drawWinOverlay()
 {
@@ -365,9 +489,64 @@ void drawWinOverlay()
     glEnable(GL_DEPTH_TEST);
 }
 
+void drawLoseOverlay()
+{
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(shaderProgram);
+
+    glm::mat4 orthoProj = glm::ortho(
+        0.0f, static_cast<float>(windowWidth),
+        static_cast<float>(windowHeight), 0.0f,
+        -10.0f, 10.0f
+    );
+
+    glm::mat4 identityView(1.0f);
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "projection"),
+        1, GL_FALSE, glm::value_ptr(orthoProj)
+    );
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "view"),
+        1, GL_FALSE, glm::value_ptr(identityView)
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 1
+    );
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, floorTexture);
+
+    float cx = windowWidth * 0.5f;
+    float cy = windowHeight * 0.5f;
+
+    draw2DRect(
+        cx, cy, 460.0f, 240.0f,
+        glm::vec3(0.14f, 0.18f, 0.30f), -2.0f
+    );
+
+    draw2DRect(
+        cx, cy - 55.0f, 320.0f, 52.0f,
+        glm::vec3(0.75f, 0.15f, 0.15f), -1.0f
+    );
+
+    drawBlockLabel(
+        cx, cy - 55.0f, 30.0f,
+        "TIME UP", glm::vec3(1.0f), -0.5f
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 0
+    );
+
+    glEnable(GL_DEPTH_TEST);
+}
+
 void mouseClick(int button, int state, int x, int y)
 {
-    if (!gameWon)
+    if (!gameWon && !gameLost)
         return;
 
     if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
@@ -378,7 +557,6 @@ void mouseClick(int button, int state, int x, int y)
     }
 }
 
-// Shaders
 const char* vertexShaderSource = R"(
 #version 330 core
 
@@ -465,19 +643,23 @@ void main()
     vec3 lighting = ambient +
                     (diffuse + specular) * attenuation;
     
-    if (!lightEnabled) {
-        lighting = vec3(0.12);
-    }
-
     if (isUI) {
+    FragColor = vec4(objectColor, 1.0);
+    return;
+}
+
+    // Blinn-Phong OFF: show original texture color
+    if (!lightEnabled) {
         FragColor = vec4(baseColor, 1.0);
         return;
     }
 
+    // Blinn-Phong ON: apply calculated lighting
     vec3 result = lighting * baseColor;
 
     FragColor = vec4(result, 1.0);
 }
+
 )";
 
 
@@ -584,27 +766,22 @@ GLuint loadTexture(const char* path)
 void createCube()
 {
     float vertices[] = {
-        // Front
+
         -0.5f,-0.5f, 0.5f,  0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f,
         -0.5f,-0.5f, 0.5f,  0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
 
-        // Back
          0.5f,-0.5f,-0.5f, -0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,
          0.5f,-0.5f,-0.5f, -0.5f, 0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
 
-         // Left
          -0.5f,-0.5f,-0.5f, -0.5f,-0.5f, 0.5f, -0.5f, 0.5f, 0.5f,
          -0.5f,-0.5f,-0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,-0.5f,
 
-         // Right
           0.5f,-0.5f, 0.5f,  0.5f,-0.5f,-0.5f,  0.5f, 0.5f,-0.5f,
           0.5f,-0.5f, 0.5f,  0.5f, 0.5f,-0.5f,  0.5f, 0.5f, 0.5f,
 
-          // Top
           -0.5f, 0.5f, 0.5f,  0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f,
           -0.5f, 0.5f, 0.5f,  0.5f, 0.5f,-0.5f, -0.5f, 0.5f,-0.5f,
 
-          // Bottom
           -0.5f,-0.5f,-0.5f,  0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f,
           -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f
     };
@@ -673,14 +850,12 @@ void createCube()
         GL_STATIC_DRAW
     );
 
-    // Position: XYZ
     glVertexAttribPointer(
         0, 3, GL_FLOAT, GL_FALSE,
         8 * sizeof(float), (void*)0
     );
     glEnableVertexAttribArray(0);
 
-    // Texture coordinates: UV
     glVertexAttribPointer(
         1, 2, GL_FLOAT, GL_FALSE,
         8 * sizeof(float),
@@ -688,7 +863,6 @@ void createCube()
     );
     glEnableVertexAttribArray(1);
 
-    // Normal: NX, NY, NZ
     glVertexAttribPointer(
         2, 3, GL_FLOAT, GL_FALSE,
         8 * sizeof(float),
@@ -724,10 +898,10 @@ void drawCube(glm::vec3 position,
 }
 
 void drawKeyPart(const glm::vec3& center,
-                 const glm::vec3& localOffset,
-                 const glm::vec3& scale,
-                 const glm::vec3& color,
-                 float spinDeg)
+    const glm::vec3& localOffset,
+    const glm::vec3& scale,
+    const glm::vec3& color,
+    float spinDeg)
 {
     glm::mat4 rotMat = glm::rotate(
         glm::mat4(1.0f),
@@ -750,16 +924,16 @@ void drawKey(float timeSec)
     glBindTexture(GL_TEXTURE_2D, keyTexture ? keyTexture : floorTexture);
 
     float ringZ = -0.22f;
-    drawKeyPart(center, glm::vec3(0.0f,  0.07f, ringZ),        glm::vec3(0.05f, 0.035f, 0.14f), gold, spinDeg);
-    drawKeyPart(center, glm::vec3(0.0f, -0.07f, ringZ),        glm::vec3(0.05f, 0.035f, 0.14f), gold, spinDeg);
-    drawKeyPart(center, glm::vec3(0.0f,  0.0f,  ringZ - 0.055f), glm::vec3(0.05f, 0.17f, 0.035f), gold, spinDeg);
-    drawKeyPart(center, glm::vec3(0.0f,  0.0f,  ringZ + 0.055f), glm::vec3(0.05f, 0.17f, 0.035f), gold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, 0.07f, ringZ), glm::vec3(0.05f, 0.035f, 0.14f), gold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, -0.07f, ringZ), glm::vec3(0.05f, 0.035f, 0.14f), gold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, 0.0f, ringZ - 0.055f), glm::vec3(0.05f, 0.17f, 0.035f), gold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, 0.0f, ringZ + 0.055f), glm::vec3(0.05f, 0.17f, 0.035f), gold, spinDeg);
 
-    drawKeyPart(center, glm::vec3(0.0f,  0.0f,  0.02f),         glm::vec3(0.045f, 0.045f, 0.30f), gold,     spinDeg);
-    drawKeyPart(center, glm::vec3(0.0f,  0.0f, -0.06f),         glm::vec3(0.052f, 0.055f, 0.025f), darkGold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, 0.0f, 0.02f), glm::vec3(0.045f, 0.045f, 0.30f), gold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, 0.0f, -0.06f), glm::vec3(0.052f, 0.055f, 0.025f), darkGold, spinDeg);
 
-    drawKeyPart(center, glm::vec3(0.0f, -0.055f, 0.13f),         glm::vec3(0.04f,  0.08f,  0.035f), gold, spinDeg);
-    drawKeyPart(center, glm::vec3(0.0f, -0.045f, 0.07f),         glm::vec3(0.04f,  0.06f,  0.035f), gold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, -0.055f, 0.13f), glm::vec3(0.04f, 0.08f, 0.035f), gold, spinDeg);
+    drawKeyPart(center, glm::vec3(0.0f, -0.045f, 0.07f), glm::vec3(0.04f, 0.06f, 0.035f), gold, spinDeg);
 }
 
 void drawDoor()
@@ -782,19 +956,21 @@ void drawDoor()
     glm::mat4 rotMat = glm::rotate(glm::mat4(1.0f), glm::radians(yawDeg), glm::vec3(0.0f, 1.0f, 0.0f));
     auto toWorld = [&](glm::vec3 localPos) {
         return base + glm::vec3(rotMat * glm::vec4(localPos, 1.0f));
-    };
+        };
 
     drawCube(toWorld(glm::vec3(-0.36f, exitPos.y + 0.75f, 0.0f)), glm::vec3(0.12f, 1.50f, 0.16f), frameColor, yawDeg);
-    drawCube(toWorld(glm::vec3( 0.36f, exitPos.y + 0.75f, 0.0f)), glm::vec3(0.12f, 1.50f, 0.16f), frameColor, yawDeg);
+    drawCube(toWorld(glm::vec3(0.36f, exitPos.y + 0.75f, 0.0f)), glm::vec3(0.12f, 1.50f, 0.16f), frameColor, yawDeg);
 
     float doorY = exitPos.y + (hasKey ? 1.25f : 0.70f);
     drawCube(toWorld(glm::vec3(0.0f, doorY, 0.0f)), glm::vec3(0.62f, 1.35f, 0.10f), doorColor, yawDeg);
 }
 
+
 bool isWall(float x, float z)
 {
     int col = static_cast<int>(std::floor(x));
     int row = static_cast<int>(std::floor(z));
+
 
     if (row < 0 || row >= static_cast<int>(maze.size()))
         return true;
@@ -802,8 +978,16 @@ bool isWall(float x, float z)
     if (col < 0 || col >= static_cast<int>(maze[row].size()))
         return true;
 
+    if (row == doorCell.x && col == doorCell.y)
+    {
+
+        return !hasKey;
+    }
+
     return maze[row][col] == '#';
 }
+
+
 
 bool canMove(float x, float z)
 {
@@ -815,37 +999,94 @@ bool canMove(float x, float z)
         !isWall(x + radius, z + radius);
 }
 
+
+
 void updateGameplayLogic()
 {
-    if (gameWon)
+    if (gameWon || gameLost || freeCamera)
         return;
 
     glm::vec2 playerXZ(cameraPos.x, cameraPos.z);
     glm::vec2 keyXZ(keyPos.x, keyPos.z);
-    const float pickupRadius = 1.4f;
 
-    // Key pickup check
-    if (!hasKey && glm::length(playerXZ - keyXZ) <= pickupRadius) {
-    hasKey = true;
-    printStatus(STATUS_KEY_COLLECTED);
-}
+    if (!hasKey && glm::length(playerXZ - keyXZ) <= keyPickupRadius)
+    {
+        hasKey = true;
+        printStatus(STATUS_KEY_COLLECTED);
+    }
 
-    // Exit win check 
-    if (hasKey) {
-        float distToExit = glm::length(playerXZ - glm::vec2(exitTriggerPos.x, exitTriggerPos.z));
-        if (distToExit < 0.90f) {
+
+
+    if (hasKey && doorCell.x >= 0)
+    {
+        glm::vec2 doorXZ(exitPos.x, exitPos.z);
+        glm::vec2 playerFromDoor = playerXZ - doorXZ;
+
+        float side = glm::dot(playerFromDoor, doorOpenDir);
+        float distanceToDoor = glm::length(playerFromDoor);
+
+        if (side > 0.35f && distanceToDoor < 1.25f)
+        {
+            wasInFrontOfDoor = true;
+        }
+
+        if (wasInFrontOfDoor &&
+            side < -0.35f &&
+            distanceToDoor < 1.0f)
+        {
             gameWon = true;
             mouseCaptured = false;
+
             glutSetCursor(GLUT_CURSOR_INHERIT);
             printStatus(STATUS_WIN);
         }
     }
+
 }
 
 
 
 void processMovement(float deltaTime)
 {
+    if (manualLightMode)
+    {
+        float step = lightMoveSpeed * deltaTime;
+
+        if (keys['j']) movableLightPos.x -= step;
+        if (keys[';']) movableLightPos.x += step;
+        if (keys['i']) movableLightPos.z -= step;
+        if (keys['k']) movableLightPos.z += step;
+        if (keys['u']) movableLightPos.y += step;
+        if (keys['o']) movableLightPos.y -= step;
+    }
+    if (freeCamera)
+    {
+        float velocity = cameraSpeed * deltaTime * 2.0f;
+
+        glm::vec3 right = glm::normalize(
+            glm::cross(cameraFront, cameraUp)
+        );
+
+        glm::vec3 movement(0.0f);
+
+        if (keys['w']) movement += cameraFront;
+        if (keys['s']) movement -= cameraFront;
+
+        if (keys['a']) movement -= right;
+        if (keys['d']) movement += right;
+
+        if (keys['e']) movement += cameraUp;
+        if (keys['q']) movement -= cameraUp;
+
+        if (glm::length(movement) > 0.0f)
+        {
+            movement = glm::normalize(movement);
+            cameraPos += movement * velocity;
+        }
+
+        return;
+    }
+
     float velocity = cameraSpeed * deltaTime;
 
     glm::vec3 forward(
@@ -882,33 +1123,337 @@ void processMovement(float deltaTime)
     }
 }
 
+void drawStatusHUD()
+{
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(shaderProgram);
+
+    glm::mat4 projection2D = glm::ortho(
+        0.0f, static_cast<float>(windowWidth),
+        static_cast<float>(windowHeight), 0.0f,
+        -10.0f, 10.0f
+    );
+
+    glm::mat4 identity(1.0f);
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "projection"),
+        1, GL_FALSE, glm::value_ptr(projection2D)
+    );
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "view"),
+        1, GL_FALSE, glm::value_ptr(identity)
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 1
+    );
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, floorTexture);
+
+    const float panelWidth = 310.0f;
+    const float panelHeight = 230.0f;
+    const float panelX = windowWidth - panelWidth / 2.0f - 20.0f;
+    const float panelY = panelHeight / 2.0f + 20.0f;
+
+    draw2DRect(
+        panelX, panelY,
+        panelWidth, panelHeight,
+        glm::vec3(0.08f, 0.09f, 0.13f),
+        -2.0f
+    );
+
+    std::string fpsText =
+        "FPS: " + std::to_string(static_cast<int>(currentFPS));
+
+    std::string keyText =
+        hasKey ? "KEY: FOUND" : "KEY: NOT FOUND";
+
+    std::string shaderText =
+        lightEnabled ? "SHADER: ON" : "SHADER: OFF";
+
+    std::string cameraText =
+        freeCamera ? "CAMERA: FREE" : "CAMERA: GAME";
+
+    std::string lightText =
+        manualLightMode ? "LIGHT: MANUAL" : "LIGHT: PLAYER";
+
+    std::string statusText =
+        gameWon ? "STATUS: WIN" :
+        gameLost ? "STATUS: LOST" :
+        gamePaused ? "STATUS: PAUSED" :
+        "STATUS: PLAYING";
+
+    const float textHeight = 13.0f;
+    const float lineSpacing = 34.0f;
+    const float firstY = panelY - 85.0f;
+
+    glm::vec3 white(1.0f);
+    glm::vec3 gold(1.0f, 0.85f, 0.45f);
+    glm::vec3 green(0.35f, 1.0f, 0.45f);
+
+    drawBlockLabel(
+        panelX, firstY,
+        textHeight, fpsText, white
+    );
+
+    drawBlockLabel(
+        panelX, firstY + lineSpacing,
+        textHeight, keyText,
+        hasKey ? green : white
+    );
+
+    drawBlockLabel(
+        panelX, firstY + lineSpacing * 2,
+        textHeight, shaderText, gold
+    );
+
+    drawBlockLabel(
+        panelX, firstY + lineSpacing * 3,
+        textHeight, cameraText, white
+    );
+
+    drawBlockLabel(
+        panelX, firstY + lineSpacing * 4,
+        textHeight, lightText, white
+    );
+
+    drawBlockLabel(
+        panelX, firstY + lineSpacing * 5,
+        textHeight, statusText,
+        gamePaused ? gold : white
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 0
+    );
+
+    glEnable(GL_DEPTH_TEST);
+}
+
+void drawTimerHUD()
+{
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(shaderProgram);
+
+    glm::mat4 projection2D = glm::ortho(
+        0.0f, static_cast<float>(windowWidth),
+        static_cast<float>(windowHeight), 0.0f,
+        -10.0f, 10.0f
+    );
+
+    glm::mat4 identity(1.0f);
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "projection"),
+        1, GL_FALSE, glm::value_ptr(projection2D)
+    );
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "view"),
+        1, GL_FALSE, glm::value_ptr(identity)
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 1
+    );
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, floorTexture);
+
+    draw2DRect(
+        125.0f, 50.0f,
+        220.0f, 65.0f,
+        glm::vec3(0.10f, 0.10f, 0.13f),
+        -2.0f
+    );
+
+    int remaining = static_cast<int>(
+        std::ceil(std::max(0.0f, GAME_TIME_LIMIT - gameTime))
+        );
+
+    int minutes = remaining / 60;
+    int seconds = remaining % 60;
+
+    std::string timerText =
+        std::to_string(minutes) + ":" +
+        (seconds < 10 ? "0" : "") +
+        std::to_string(seconds);
+
+    glm::vec3 timerColor =
+        remaining <= 30
+        ? glm::vec3(1.0f, 0.25f, 0.25f)
+        : glm::vec3(1.0f, 0.85f, 0.45f);
+
+    drawBlockLabel(
+        125.0f, 50.0f,
+        28.0f,
+        timerText,
+        timerColor,
+        -0.5f
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 0
+    );
+
+    glEnable(GL_DEPTH_TEST);
+}
+
+
+void drawHelpOverlay()
+{
+    if (!showHelp)
+        return;
+
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(shaderProgram);
+
+    glm::mat4 projection2D = glm::ortho(
+        0.0f, static_cast<float>(windowWidth),
+        static_cast<float>(windowHeight), 0.0f,
+        -10.0f, 10.0f
+    );
+
+    glm::mat4 identity(1.0f);
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "projection"),
+        1, GL_FALSE, glm::value_ptr(projection2D)
+    );
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "view"),
+        1, GL_FALSE, glm::value_ptr(identity)
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 1
+    );
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, floorTexture);
+
+    float cx = windowWidth * 0.5f;
+    float cy = windowHeight * 0.5f;
+
+    draw2DRect(
+        cx, cy, 620.0f, 560.0f,
+        glm::vec3(0.08f, 0.09f, 0.13f),
+        -2.0f
+    );
+
+    draw2DRect(
+        cx, cy - 225.0f, 550.0f, 55.0f,
+        glm::vec3(0.35f, 0.25f, 0.12f),
+        -1.0f
+    );
+
+    glm::vec3 white(1.0f);
+    glm::vec3 gold(1.0f, 0.85f, 0.45f);
+
+    drawBlockLabel(cx, cy - 225.0f, 27.0f,
+        "CONTROLS", gold);
+
+    const float fontSize = 16.0f;
+    const float spacing = 42.0f;
+    const float firstY = cy - 160.0f;
+
+    drawBlockLabel(cx, firstY, fontSize,
+        "WASD MOVE", white);
+
+    drawBlockLabel(cx, firstY + spacing, fontSize,
+        "MOUSE LOOK", white);
+
+    drawBlockLabel(cx, firstY + spacing * 2, fontSize,
+        "F FREE CAMERA", white);
+
+    drawBlockLabel(cx, firstY + spacing * 3, fontSize,
+        "Q E CAMERA UP DOWN", white);
+
+    drawBlockLabel(cx, firstY + spacing * 4, fontSize,
+        "L SHADER ON OFF", white);
+
+    drawBlockLabel(cx, firstY + spacing * 5, fontSize,
+        "T LIGHT MODE", white);
+
+    drawBlockLabel(cx, firstY + spacing * 6, fontSize,
+        "I J K U O LIGHT MOVE", white);
+
+    drawBlockLabel(cx, firstY + spacing * 7, fontSize,
+        "P PAUSE", white);
+
+    drawBlockLabel(cx, firstY + spacing * 8, fontSize,
+        "R RESTART", white);
+
+    drawBlockLabel(cx, firstY + spacing * 9, fontSize,
+        "H CLOSE HELP", gold);
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 0
+    );
+
+    glEnable(GL_DEPTH_TEST);
+}
+
+
 void display()
 {
     static bool firstFrame = true;
     if (firstFrame) {
         firstFrame = false;
         std::cout << "First frame start" << std::endl;
-    
+
     }
     int currentTime = glutGet(GLUT_ELAPSED_TIME);
+    
     float deltaTime = (currentTime - lastTime) / 1000.0f;
     lastTime = currentTime;
 
     if (deltaTime > 0.05f)
         deltaTime = 0.05f;
 
-    processMovement(deltaTime);
-    updateGameplayLogic();
+    fpsFrames++;
+
+    int fpsElapsed = currentTime - fpsLastTime;
+
+    if (fpsElapsed >= 1000)
+    {
+        currentFPS = fpsFrames * 1000.0f / fpsElapsed;
+
+        fpsFrames = 0;
+        fpsLastTime = currentTime;
+    }
+
+    if (!gameWon && !gameLost && !gamePaused)
+    {
+        animationTime += deltaTime;
+        gameTime += deltaTime;
+
+        if (gameTime >= GAME_TIME_LIMIT)
+        {
+            gameTime = GAME_TIME_LIMIT;
+            gameLost = true;
+
+            std::cout << "TIME UP! You lost!" << std::endl;
+        }
+        else
+        {
+            processMovement(deltaTime);
+            updateGameplayLogic();
+        }
+    }
 
     glClearColor(0.08f, 0.09f, 0.13f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(shaderProgram);
 
-    // Point light position
-    glm::vec3 lightPos = cameraPos + glm::vec3(0.0f, 0.5f, 0.0f);
-
-    // Warm torch-like light
+    glm::vec3 lightPos = manualLightMode
+        ? movableLightPos
+        : cameraPos + glm::vec3(0.0f, 0.5f, 0.0f);
     glm::vec3 lightColor(1.0f, 0.75f, 0.45f);
 
     glUniform3fv(
@@ -963,32 +1508,26 @@ void display()
     );
 
 
-    // Floor and walls
-
-    // Activate texture unit 0
     glActiveTexture(GL_TEXTURE0);
 
-    // Tell the shader to use texture unit 0
     glUniform1i(
         glGetUniformLocation(shaderProgram, "ourTexture"),
         0
     );
 
-    // Draw maze
     for (int row = 0; row < static_cast<int>(maze.size()); row++)
     {
         for (int col = 0; col < static_cast<int>(maze[row].size()); col++)
         {
-            // 1. Bind floor texture
+
             glBindTexture(GL_TEXTURE_2D, floorTexture);
 
-            // Draw floor
             drawCube(
                 glm::vec3(col + 0.5f, -0.08f, row + 0.5f),
                 glm::vec3(1.0f, 0.16f, 1.0f),
                 glm::vec3(1.0f, 1.0f, 1.0f)
             );
-            // Ceiling
+
             glBindTexture(GL_TEXTURE_2D, wallTexture);
 
             drawCube(
@@ -1012,20 +1551,23 @@ void display()
         }
     }
 
-    // Draw door at exitPos
     drawDoor();
 
-    // Draw golden key if not collected yet
     if (!hasKey)
     {
-        drawKey(currentTime / 1000.0f);
+        drawKey(animationTime);
     }
-
+    drawTimerHUD();
+    drawStatusHUD();
     if (gameWon)
     {
         drawWinOverlay();
     }
-
+    if (gameLost)
+    {
+        drawLoseOverlay();
+    }
+    drawHelpOverlay();
     glutSwapBuffers();
 }
 
@@ -1043,15 +1585,74 @@ void keyboardDown(unsigned char key, int x, int y)
         glutLeaveMainLoop();
         return;
     }
+    if (key == 't')
+    {
+        manualLightMode = !manualLightMode;
 
+        std::cout << "Light mode: "
+            << (manualLightMode ? "MANUAL" : "PLAYER")
+            << std::endl;
+    }
     if (key >= 'A' && key <= 'Z')
         key = key - 'A' + 'a';
 
     keys[key] = true;
-    
+
     if (key == 'l') {
         lightEnabled = !lightEnabled;
         std::cout << "Light toggled: " << (lightEnabled ? "Light : ON" : "Light : OFF") << std::endl;
+    }
+    if (key == 'h')
+    {
+        showHelp = !showHelp;
+
+        std::cout << "Help: "
+            << (showHelp ? "ON" : "OFF")
+            << std::endl;
+    }
+    if (key == 'p' && !gameWon && !gameLost)
+    {
+        gamePaused = !gamePaused;
+
+        keys['w'] = false;
+        keys['a'] = false;
+        keys['s'] = false;
+        keys['d'] = false;
+
+        std::cout << (gamePaused ? "PAUSED" : "RESUMED")
+            << std::endl;
+    }
+    if (key == 'f' && !gameWon && !gameLost && !gamePaused)
+    {
+        freeCamera = !freeCamera;
+
+        if (freeCamera)
+        {
+      
+            savedCameraPos = cameraPos;
+            savedYaw = yaw;
+            savedPitch = pitch;
+
+            std::cout << "FREE CAMERA ON" << std::endl;
+        }
+        else
+        {
+
+            cameraPos = savedCameraPos;
+            yaw = savedYaw;
+            pitch = savedPitch;
+
+            updateCameraDirection();
+
+            std::cout << "FREE CAMERA OFF" << std::endl;
+        }
+
+        keys['w'] = false;
+        keys['a'] = false;
+        keys['s'] = false;
+        keys['d'] = false;
+        keys['q'] = false;
+        keys['e'] = false;
     }
 
     if (key == 'r') {
@@ -1069,7 +1670,7 @@ void keyboardUp(unsigned char key, int x, int y)
 
 void mouseMotion(int x, int y)
 {
-    if (gameWon || !mouseCaptured)
+    if (gameWon || gameLost || gamePaused || !mouseCaptured)
         return;
 
     int centerX = windowWidth / 2;
@@ -1096,36 +1697,6 @@ void mouseMotion(int x, int y)
     updateCameraDirection();
     glutWarpPointer(centerX, centerY);
 }
-
-void drawBitmapText(float xPx, float yPx, const char* text, void* font = GLUT_BITMAP_HELVETICA_18)
-{
-    float ndcX = (xPx / static_cast<float>(windowWidth)) * 2.0f - 1.0f;
-    float ndcY = 1.0f - (yPx / static_cast<float>(windowHeight)) * 2.0f;
-
-    glUseProgram(0);
-    glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
-    glLoadIdentity();
-    glOrtho(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
-
-    glMatrixMode(GL_MODELVIEW);
-    glPushMatrix();
-    glLoadIdentity();
-
-    glColor3f(1.0f, 1.0f, 1.0f);
-    glRasterPos2f(ndcX, ndcY);
-    for (const char* c = text; *c != '\0'; ++c) {
-        glutBitmapCharacter(font, *c);
-    }
-
-    glPopMatrix();
-    glMatrixMode(GL_PROJECTION);
-    glPopMatrix();
-    glMatrixMode(GL_MODELVIEW);
-}
-
-
-
 void idle()
 {
     glutPostRedisplay();
@@ -1167,7 +1738,12 @@ int main(int argc, char** argv)
     std::cout << "Before keyTexture" << std::endl;
     keyTexture = loadTexture("assets/textures/key.jpg");
     std::cout << "After keyTexture" << std::endl;
-
+    if (wallTexture == 0 || floorTexture == 0)
+    {
+        std::cerr << "ERROR: Failed to load game textures!" << std::endl;
+        std::cerr << "Check wall and floor texture paths." << std::endl;
+        return 1;
+    }
     lastTime = glutGet(GLUT_ELAPSED_TIME);
     printStatus(STATUS_FIND_KEY, true);
 
