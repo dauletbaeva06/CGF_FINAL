@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>glew.v140</id>
+    <version>1.12.0</version>
+    <title>The OpenGL Extension Wrangler Library</title>
+    <authors>Milan Ikits,  Marcelo Magallon,  Lev Povalahev</authors>
+    <owners>Milan Ikits, Marcelo Magallon, Lev Povalahev</owners>
+    <licenseUrl>http://glew.sourceforge.net/credits.html</licenseUrl>
+    <projectUrl>http://glew.sourceforge.net/</projectUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>The OpenGL Extension Wrangler Library (GLEW) is a cross-platform open-source C/C++ extension loading library. GLEW provides efficient run-time mechanisms for determining which OpenGL extensions are supported on the target platform. OpenGL core and extension functionality is exposed in a single header file. This is a NuGet package of GLEW built with Visual Studio 2015. Static library only.</description>
+    <summary>The OpenGL Extension Wrangler Library (GLEW) is a cross-platform open-source C/C++ extension loading library. GLEW provides efficient run-time mechanisms for determining which OpenGL extensions are supported on the target platform. OpenGL core and extension functionality is exposed in a single header file. This is a NuGet package of GLEW built with Visual Studio 2015. Static library only.</summary>
+    <releaseNotes>http://glew.sourceforge.net/</releaseNotes>
+    <copyright>Copyright (C) 2002-2007, Milan Ikits &lt;milan ikits[]ieee org&gt;. Copyright (C) 2002-2007, Marcelo E. Magallon &lt;mmagallo[]debian org&gt;. Copyright (C) 2002, Lev Povalahev.</copyright>
+    <tags>native nativepackage glew opengl gl vs2015 v140 2015</tags>
+  </metadata>
+</package>

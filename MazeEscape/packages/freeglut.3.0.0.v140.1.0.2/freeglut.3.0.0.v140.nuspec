@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>freeglut.3.0.0.v140</id>
+    <version>1.0.2</version>
+    <title>freeglut 3.0.0 library</title>
+    <authors>freeglut contributors</authors>
+    <owners>freeglut contributors</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>This package contains 32 and 64 bit Windows DLLs, import libraries, and header files, allowing freeglut applications to be written using Microsoft’s Visual C++. The package was built from source code using Visual Studio 2015.</description>
+    <copyright>Copyright 2019</copyright>
+  </metadata>
+</package>

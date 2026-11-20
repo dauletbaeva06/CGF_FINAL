@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<coreProperties xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties">
+  <dc:creator>GLM contributors</dc:creator>
+  <dc:description>OpenGL Mathematics (GLM) is a header only C++ mathematics library for graphics software based on the OpenGL Shading Language (GLSL) specifications.
+
+GLM provides classes and functions designed and implemented with the same naming conventions and functionalities than GLSL so that anyone who knows GLSL, can use GLM as well in C++.
+
+This project isn't limited to GLSL features. An extension system, based on the GLSL extension conventions, provides extended capabilities: matrix transformations, quaternions, data packing, random numbers, noise, etc...
+
+This library works perfectly with OpenGL but it also ensures interoperability with other third party libraries and SDK. It is a good candidate for software rendering (raytracing / rasterisation), image processing, physic simulations and any development context that requires a simple and convenient mathematics library.
+
+GLM is written in C++98 but can take advantage of C++11 when supported by the compiler. It is a platform independent library with no dependence and it officially supports the following compilers:
+- GCC 4.7 and higher
+- Intel C++ Compose XE 2013 and higher
+- Clang 3.4 and higher
+- Apple Clang 6.0 and higher
+- Visual C++ 2013 and higher
+- CUDA 9.0 and higher (experimental)
+- Any C++11 compiler</dc:description>
+  <dc:identifier>glm</dc:identifier>
+  <version>1.0.3.0</version>
+  <keywords>GLM OpenGL Mathematics native nativepackage</keywords>
+  <lastModifiedBy>NuGet, Version=7.0.1.1, Culture=neutral, PublicKeyToken=31bf3856ad364e35;Microsoft Windows NT 10.0.26200.0;.NET Framework 4.7.2</lastModifiedBy>
+</coreProperties>
