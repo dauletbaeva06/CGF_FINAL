@@ -146,6 +146,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <None Include="README.md">
+      <FileType>Document</FileType>
+    </None>
     <None Include=".gitignore">
       <FileType>Document</FileType>
     </None>

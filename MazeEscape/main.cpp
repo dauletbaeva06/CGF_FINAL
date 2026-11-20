@@ -157,7 +157,6 @@ void resetGame()
 
     lightEnabled = true;
 
-    /
     firstMouse = true;
     mouseCaptured = true;
 
@@ -1123,6 +1122,64 @@ void processMovement(float deltaTime)
     }
 }
 
+void drawProjectInfoHUD()
+{
+    glDisable(GL_DEPTH_TEST);
+    glUseProgram(shaderProgram);
+
+    glm::mat4 projection2D = glm::ortho(
+        0.0f, (float)windowWidth,
+        (float)windowHeight, 0.0f,
+        -10.0f, 10.0f
+    );
+
+    glm::mat4 identity(1.0f);
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "projection"),
+        1, GL_FALSE, glm::value_ptr(projection2D)
+    );
+
+    glUniformMatrix4fv(
+        glGetUniformLocation(shaderProgram, "view"),
+        1, GL_FALSE, glm::value_ptr(identity)
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 1
+    );
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, floorTexture);
+
+    float cx = windowWidth * 0.5f;
+    float y = windowHeight - 62.0f;
+
+    draw2DRect(
+        cx, y, 610.0f, 85.0f,
+        glm::vec3(0.06f, 0.07f, 0.10f),
+        -2.0f
+    );
+
+    drawBlockLabel(
+        cx, y - 17.0f, 14.0f,
+        "3D MAZE ESCAPE",
+        glm::vec3(1.0f, 0.85f, 0.45f)
+    );
+
+    drawBlockLabel(
+        cx, y + 17.0f, 11.0f,
+        "SKAKOVA TOMIRIS  DAULETBAYEVA AITOLKYN",
+        glm::vec3(1.0f)
+    );
+
+    glUniform1i(
+        glGetUniformLocation(shaderProgram, "isUI"), 0
+    );
+
+    glEnable(GL_DEPTH_TEST);
+}
+
 void drawStatusHUD()
 {
     glDisable(GL_DEPTH_TEST);
@@ -1559,6 +1616,7 @@ void display()
     }
     drawTimerHUD();
     drawStatusHUD();
+    drawProjectInfoHUD();
     if (gameWon)
     {
         drawWinOverlay();
